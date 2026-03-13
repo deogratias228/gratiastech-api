@@ -98,7 +98,8 @@ return [
             'prefix' => '',
             'prefix_indexes' => true,
             'search_path' => 'public',
-            'sslmode' => 'require',
+            // 'sslmode' => 'require',
+            'sslmode' => 'prefer',
             'options' => [],
         ],
 

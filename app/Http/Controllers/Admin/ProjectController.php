@@ -4,145 +4,128 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Project;
-use App\Models\ProjectStep;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class ProjectController extends Controller
 {
+    /**
+     * GET /api/v1/admin/projects
+     */
     public function index(Request $request): JsonResponse
     {
-        $projects = Project::with('client:id,name,email,company')
-            ->when($request->status, fn ($q, $s) => $q->where('status', $s))
-            ->when($request->search, fn ($q, $s) => $q->where('title', 'like', "%{$s}%"))
-            ->latest()
-            ->paginate(15);
+        $query = Project::with('client:id,name,email');
+
+        // Filtres
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+        if ($request->filled('client_id')) {
+            $query->where('client_id', $request->client_id);
+        }
+        if ($request->filled('search')) {
+            $term = '%' . $request->search . '%';
+            $query->where(
+                fn($q) => $q
+                    ->where('title', 'like', $term)
+                    ->orWhere('tracking_code', 'like', $term)
+            );
+        }
+
+        $projects = $query->orderByDesc('created_at')->paginate(20);
 
         return response()->json($projects);
     }
 
+    /**
+     * GET /api/v1/admin/projects/{id}
+     */
+    public function show(string $id): JsonResponse
+    {
+        $project = Project::with(['client:id,name,email', 'steps' => fn($q) => $q->orderBy('order')])
+            ->findOrFail($id);
+
+        return response()->json(['data' => $project]);
+    }
+
+    /**
+     * POST /api/v1/admin/projects
+     */
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'client_id'        => 'required|exists:users,id',
-            'title'            => 'required|string|max:255',
-            'description'      => 'nullable|string',
-            'type'             => 'required|in:web_development,software,saas,maintenance,other',
-            'started_at'       => 'nullable|date',
-            'estimated_end_at' => 'nullable|date|after_or_equal:started_at',
-            'tech_stack'       => 'nullable|array',
-            'internal_notes'   => 'nullable|string',
-            'steps'            => 'nullable|array',
-            'steps.*.title'    => 'required_with:steps|string',
-            'steps.*.description' => 'nullable|string',
+            'client_id' => ['required', 'exists:users,id'],
+            'title' => ['required', 'string', 'max:150'],
+            'description' => ['nullable', 'string'],
+            'type' => ['required', Rule::in(['web', 'logiciel', 'saas', 'mobile', 'autre'])],
+            'status' => ['sometimes', Rule::in(['draft', 'active', 'paused', 'completed', 'cancelled'])],
+            'progress' => ['sometimes', 'integer', 'min:0', 'max:100'],
+            'tech_stack' => ['nullable', 'array'],
+            'tech_stack.*' => ['string', 'max:50'],
+            'is_portfolio' => ['boolean'],
+            'started_at' => ['nullable', 'date'],
+            'estimated_end_at' => ['nullable', 'date', 'after_or_equal:started_at'],
+            'thumbnail' => ['nullable', 'string', 'max:255'],
+            'notes' => ['nullable', 'string'],
         ]);
 
-        $project = Project::create([
-            ...$validated,
-            'tracking_code' => Project::generateTrackingCode(),
-            'status'        => 'draft',
-            'progress'      => 0,
-        ]);
+        // Génération du tracking_code : GT-YYYY-XXX
+        $year = now()->year;
+        $count = Project::whereYear('created_at', $year)->count() + 1;
+        $validated['tracking_code'] = sprintf('GT-%d-%03d', $year, $count);
+        $validated['slug'] = Str::slug($validated['title']) . '-' . strtolower($validated['tracking_code']);
 
-        // Créer les étapes si fournies
-        if (! empty($validated['steps'])) {
-            foreach ($validated['steps'] as $index => $step) {
-                $project->steps()->create([
-                    'title'       => $step['title'],
-                    'description' => $step['description'] ?? null,
-                    'order'       => $index + 1,
-                    'status'      => 'pending',
-                ]);
-            }
-        }
+        $project = Project::create($validated);
 
-        return response()->json([
-            'message' => 'Projet créé avec succès.',
-            'data'    => $project->load('steps'),
-        ], 201);
+        return response()->json(['data' => $project], 201);
     }
 
-    public function show(Project $project): JsonResponse
+    /**
+     * PUT /api/v1/admin/projects/{id}
+     */
+    public function update(Request $request, string $id): JsonResponse
     {
-        return response()->json([
-            'data' => $project->load(['client:id,name,email,company', 'steps']),
-        ]);
-    }
+        $project = Project::findOrFail($id);
 
-    public function update(Request $request, Project $project): JsonResponse
-    {
         $validated = $request->validate([
-            'title'            => 'sometimes|string|max:255',
-            'description'      => 'nullable|string',
-            'status'           => 'sometimes|in:draft,in_progress,on_hold,completed,cancelled',
-            'progress'         => 'sometimes|integer|min:0|max:100',
-            'estimated_end_at' => 'nullable|date',
-            'tech_stack'       => 'nullable|array',
-            'internal_notes'   => 'nullable|string',
-            'is_portfolio'     => 'sometimes|boolean',
-            'portfolio_data'   => 'nullable|array',
+            'client_id' => ['sometimes', 'exists:users,id'],
+            'title' => ['sometimes', 'string', 'max:150'],
+            'description' => ['nullable', 'string'],
+            'type' => ['sometimes', Rule::in(['web', 'logiciel', 'saas', 'mobile', 'autre'])],
+            'status' => ['sometimes', Rule::in(['draft', 'active', 'paused', 'completed', 'cancelled'])],
+            'progress' => ['sometimes', 'integer', 'min:0', 'max:100'],
+            'tech_stack' => ['nullable', 'array'],
+            'tech_stack.*' => ['string', 'max:50'],
+            'is_portfolio' => ['boolean'],
+            'started_at' => ['nullable', 'date'],
+            'estimated_end_at' => ['nullable', 'date'],
+            'completed_at' => ['nullable', 'date'],
+            'thumbnail' => ['nullable', 'string', 'max:255'],
+            'notes' => ['nullable', 'string'],
         ]);
 
-        // Auto-complétion date si statut completed
-        if (isset($validated['status']) && $validated['status'] === 'completed') {
+        // Auto-set completed_at si on passe à completed
+        if (isset($validated['status']) && $validated['status'] === 'completed' && !$project->completed_at) {
             $validated['completed_at'] = now();
-            $validated['progress']     = 100;
+            $validated['progress'] = 100;
         }
 
         $project->update($validated);
 
-        return response()->json([
-            'message' => 'Projet mis à jour.',
-            'data'    => $project->fresh('steps'),
-        ]);
+        return response()->json(['data' => $project->fresh(['client:id,name,email', 'steps'])]);
     }
 
-    public function destroy(Project $project): JsonResponse
+    /**
+     * DELETE /api/v1/admin/projects/{id}
+     */
+    public function destroy(string $id): JsonResponse
     {
-        $project->delete();
+        $project = Project::findOrFail($id);
+        $project->delete(); // SoftDelete
 
-        return response()->json(['message' => 'Projet supprimé.']);
-    }
-
-    // Mise à jour d'une étape
-    public function updateStep(Request $request, Project $project, ProjectStep $step): JsonResponse
-    {
-        abort_unless($step->project_id === $project->id, 403);
-
-        $validated = $request->validate([
-            'title'        => 'sometimes|string|max:255',
-            'description'  => 'nullable|string',
-            'status'       => 'sometimes|in:pending,in_progress,completed,skipped',
-            'order'        => 'sometimes|integer|min:1',
-            'started_at'   => 'nullable|date',
-            'completed_at' => 'nullable|date',
-        ]);
-
-        if (isset($validated['status']) && $validated['status'] === 'completed') {
-            $validated['completed_at'] = $validated['completed_at'] ?? now()->toDateString();
-        }
-
-        $step->update($validated);
-
-        // Recalcul automatique de la progression du projet
-        $this->recalculateProgress($project);
-
-        return response()->json([
-            'message' => 'Étape mise à jour.',
-            'data'    => $step->fresh(),
-        ]);
-    }
-
-    private function recalculateProgress(Project $project): void
-    {
-        $steps = $project->steps;
-        if ($steps->isEmpty()) return;
-
-        $completed = $steps->where('status', 'completed')->count();
-        $total     = $steps->whereNotIn('status', ['skipped'])->count();
-
-        $progress = $total > 0 ? (int) round(($completed / $total) * 100) : 0;
-
-        $project->update(['progress' => $progress]);
+        return response()->json(['message' => 'Projet archivé.']);
     }
 }
