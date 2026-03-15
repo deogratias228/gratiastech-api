@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Public;
 use App\Http\Controllers\Controller;
 use App\Models\Project;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Log;
 
 class TrackingController extends Controller
 {
@@ -15,6 +16,7 @@ class TrackingController extends Controller
     public function show(string $code): JsonResponse
     {
         $code = strtoupper(trim($code));
+        Log::info("Recherche du projet {$code}");
 
         $project = Project::where('tracking_code', $code)
             ->with([
@@ -39,17 +41,17 @@ class TrackingController extends Controller
                 'estimated_end_at',
             ]);
 
+        Log::warning('message de warning');
+
         return response()->json([
-            'data' => [
-                'tracking_code' => $project->tracking_code,
-                'title' => $project->title,
-                'type' => $project->type,
-                'status' => $project->status,
-                'progress' => $project->progress,
-                'started_at' => $project->started_at,
-                'estimated_end_at' => $project->estimated_end_at,
-                'steps' => $project->steps,
-            ],
+            'tracking_code' => $project->tracking_code,
+            'title' => $project->title,
+            'type' => $project->type,
+            'status' => $project->status,
+            'progress' => $project->progress,
+            'started_at' => $project->started_at,
+            'estimated_end_at' => $project->estimated_end_at,
+            'steps' => $project->steps,
         ]);
     }
 }
